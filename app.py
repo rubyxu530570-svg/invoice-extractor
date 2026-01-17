@@ -6,17 +6,18 @@
 功能：上传PDF发票，自动识别并提取关键信息，生成Excel表格
 """
 
+import re
+import io
+import tempfile
+import os
+from datetime import datetime
+# from PIL import Image  # 暂时未使用，保留注释以便将来扩展
+
 import streamlit as st
 import pdfplumber
 import pdf2image
 import pandas as pd
-import re
-import io
-from PIL import Image
 from paddleocr import PaddleOCR
-from datetime import datetime
-import tempfile
-import os
 
 # 设置页面配置
 st.set_page_config(
@@ -181,15 +182,6 @@ def extract_invoice_info(text):
                 result["发票日期"] = date_obj.strftime('%Y-%m-%d')
             except ValueError:
                 pass
-    else:
-        date_match = date_pattern2.search(text)
-        if date_match:
-            year, month, day = date_match.groups()
-            try:
-                date_obj = datetime(int(year), int(month), int(day))
-                result["发票日期"] = date_obj.strftime('%Y-%m-%d')
-            except ValueError:
-                pass
     
     # 提取购买方名称
     buyer_pattern = re.compile(r'购买方[:：\s]*([^\n]+)')
@@ -227,7 +219,9 @@ def extract_invoice_info(text):
                 continue
                 
             # 检查是否是商品项目行的开始
-            if any(keyword in line for keyword in ['货物或应税劳务、服务名称', '货物或应税劳务名称', '项目名称', '商品名称']):
+            keywords = ['货物或应税劳务、服务名称', '货物或应税劳务名称', 
+                        '项目名称', '商品名称']
+            if any(keyword in line for keyword in keywords):
                 capture_items = True
                 # 提取冒号后的内容
                 if ':' in line or '：' in line:
@@ -238,11 +232,14 @@ def extract_invoice_info(text):
                             items.append(item)
             elif capture_items:
                 # 检查是否应该停止捕获
-                if any(keyword in line for keyword in ['价税合计', '合计', '小写', '大写', '备注']):
+                stop_keywords = ['价税合计', '合计', '小写', '大写', '备注']
+                if any(keyword in line for keyword in stop_keywords):
                     break
                 
                 # 检查是否是商品行（不是表头行）
-                if not any(keyword in line for keyword in ['规格型号', '单位', '数量', '单价', '金额', '税率', '税额', '序号', 'No']):
+                exclude_keywords = ['规格型号', '单位', '数量', '单价', '金额', 
+                                   '税率', '税额', '序号', 'No']
+                if not any(keyword in line for keyword in exclude_keywords):
                     # 过滤掉纯数字和特殊字符行
                     if line and not (line.isdigit() or all(c in '0123456789.¥￥,，' for c in line)):
                         items.append(line)
@@ -326,7 +323,7 @@ def process_pdf(pdf_file):
         try:
             # 首先尝试直接提取文本
             text = extract_text_from_text_pdf(temp_path)
-        except Exception as e:
+        except ValueError as e:
             st.warning(f"直接提取文本失败，尝试OCR: {e}")
         
         # 如果文本提取失败或文本太少，尝试OCR
@@ -337,11 +334,11 @@ def process_pdf(pdf_file):
                 # 合并两种方法的结果
                 if ocr_text:
                     text = text + "\n" + ocr_text if text else ocr_text
-            except Exception as e:
+            except ValueError as e:
                 st.error(f"OCR识别失败: {e}")
         
         if not text:
-            raise Exception("无法从PDF中提取文本")
+            raise ValueError("无法从PDF中提取文本")
         
         # 提取发票信息
         invoice_info = extract_invoice_info(text)
@@ -379,7 +376,7 @@ def process_pdf(pdf_file):
         if temp_path and os.path.exists(temp_path):
             try:
                 os.unlink(temp_path)
-            except Exception as e:
+            except ValueError as e:
                 st.warning(f"无法删除临时文件: {e}")
 
 # 主应用界面
