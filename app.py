@@ -44,49 +44,44 @@ def extract_invoice_info(text):
         except:
             pass
 
-    # 3. 购买方名称（匹配“名称:”后的内容）
+    # 3. 购买方名称
     buyer_match = re.search(r'名称[:：]\s*([^\n\r]*?公司)', text)
     if buyer_match:
         name = buyer_match.group(1).strip()
-        # 清理非中文/字母/数字字符
         clean_name = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', name)
         result["购买方名称"] = clean_name
 
-    # 4. 项目名称（找 * 开头的行）
+    # 4. 项目名称
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     project_lines = []
     for line in lines:
         if line.startswith('*') and len(line) > 2:
             project_lines.append(line)
     if project_lines:
-        result["项目名称"] = "，".join(project_lines[:2])  # 取前1～2个
+        result["项目名称"] = "，".join(project_lines[:2])
 
-    # 5. 价税合计（小写）——重点修复
-    # 尝试多种格式
+    # 5. 价税合计（小写）——支持空格、逗号
     amount = ""
-    # 格式1: (小写) ¥361.00
-    m1 = re.search(r'[  $ （]小写[ $  ）][\s:：]*[¥￥]?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)', text)
-    # 格式2: 价税合计（小写）¥361.00
-    m2 = re.search(r'(?:价税合计|合计).*?[  $ （]小写[ $  ）].*?[¥￥]?\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)', text)
-    # 格式3: 直接找 ¥ 后的金额（兜底）
-    m3 = re.search(r'[¥￥]\s*(\d{1,3}(?:,\d{3})*(?:\.\d+)?)', text)
+    patterns = [
+        r'[  $ （]小写[ $  ）][\s:：]*[¥￥]?\s*([\d\s,]+\.?\d*)',
+        r'(?:价税合计|合计).*?[  $ （]小写[ $  ）].*?[¥￥]?\s*([\d\s,]+\.?\d*)',
+        r'[¥￥]\s*([\d\s,]+\.?\d*)'
+    ]
 
-    for m in [m1, m2, m3]:
-        if m:
-            amount_str = m.group(1).replace(',', '')
-            try:
-                float(amount_str)
-                amount = amount_str
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            raw_amount = match.group(1)
+            clean_amount = re.sub(r'[,\s]', '', raw_amount)
+            if re.match(r'^\d+(\.\d+)? $ ', clean_amount):
+                amount = clean_amount
                 break
-            except:
-                continue
 
     result["价税合计"] = amount
     return result
 
 def pdf_to_text(pdf_file):
     text = ""
-    # 先尝试直接提取
     try:
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
@@ -96,7 +91,6 @@ def pdf_to_text(pdf_file):
     except:
         text = ""
 
-    # 如果没内容且OCR可用，则用OCR
     if not text.strip() and ocr_available:
         try:
             from pdf2image import convert_from_bytes
@@ -139,10 +133,13 @@ if uploaded_files:
 
     if all_results:
         df = pd.DataFrame(all_results)
+
+        # ✅ 关键修复：将“价税合计”转为数值类型
+        df["价税合计"] = pd.to_numeric(df["价税合计"], errors='coerce')
+
         st.subheader("📋 提取结果")
         st.dataframe(df.fillna(""), use_container_width=True)
 
-        # 生成Excel
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='发票信息')
