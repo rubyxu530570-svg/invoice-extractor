@@ -6,7 +6,7 @@ import os
 import tempfile
 from io import BytesIO
 
-# 尝试导入 PDF 和 OCR 相关库（按需安装）
+# 尝试导入 PDF 和 OCR 相关库
 try:
     import pdfplumber
 except ImportError:
@@ -16,14 +16,13 @@ except ImportError:
 try:
     from paddleocr import PaddleOCR
     ocr_available = True
-    # 初始化 PaddleOCR（只初始化一次）
     ocr = PaddleOCR(use_angle_cls=True, lang="ch", show_log=False)
 except Exception as e:
     ocr_available = False
     st.warning(f"PaddleOCR 未安装或加载失败，仅支持可复制文本的PDF: {e}")
 
 # ========================
-# 发票信息提取函数
+# 发票信息提取函数（已优化）
 # ========================
 def extract_invoice_info(text):
     """从文本中提取发票关键信息"""
@@ -35,70 +34,66 @@ def extract_invoice_info(text):
         "价税合计": ""
     }
 
-    # 1. 提取发票号码（通常为8位或更多数字）
-    inv_num_match = re.search(r'发票号码[:：\s]*(\d{8,20})', text)
+    # 1. 提取发票号码（固定18位数字）
+    inv_num_match = re.search(r'发票号码[:：\s]*(\d{18})', text)
     if inv_num_match:
         result["发票号码"] = inv_num_match.group(1)
 
-    # 2. 提取购买方名称（在"购买方"之后）
-    buyer_match = re.search(r'购买方[:：\s]*([^\n\r]{1,50}?(?:公司|集团|中心|店|厂))', text)
-    if buyer_match:
-        result["购买方名称"] = buyer_match.group(1).strip()
-
-    # 3. 提取项目名称（匹配商品行，简化处理）
-    # 假设项目在“货物或应税劳务名称”之后
-    items = []
-    item_lines = re.findall(r'(?:货物或应税劳务名称|项目名称)[：:\s]*([^\n\r]{2,20})', text)
-    if not item_lines:
-        # 备用：找包含中文且长度适中的行（启发式）
-        lines = [line.strip() for line in text.split('\n') if 2 <= len(line) <= 20 and re.search(r'[\u4e00-\u9fa5]', line)]
-        # 过滤掉明显不是项目的行（如金额、日期等）
-        items = [line for line in lines if not re.search(r'\d{4}年|\d+.\d+|小写|合计|税额', line)]
-    else:
-        items = item_lines
-    result["项目名称"] = "，".join(items[:5])  # 最多取5个，避免过长
-
-    # 4. 提取价税合计（小写）
-    total_match = re.search(r'价税合计.*?[（  $ ]小写[） $  ]?[:：\s]*[¥￥]?([\d,]+\.?\d*)', text)
-    if total_match:
-        amount_str = total_match.group(1).replace(',', '')
-        try:
-            float(amount_str)  # 验证是否为数字
-            result["价税合计"] = amount_str
-        except ValueError:
-            pass
-
-    # 5. 提取发票日期（多种格式）
+    # 2. 提取开票日期（支持多种格式）
     date_patterns = [
-        r'发票日期[:：\s]*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?',
-        r'开票日期[:：\s]*(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?',
-        r'(\d{4})年(\d{1,2})月(\d{1,2})日',
-        r'日期[:：\s]*(\d{4}-\d{1,2}-\d{1,2})'
+        r'开票日期[:：\s]*(\d{4}年\d{1,2}月\d{1,2}日)',
+        r'开票日期[:：\s]*(\d{4}-\d{1,2}-\d{1,2})',
+        r'(\d{4})年(\d{1,2})月(\d{1,2})日'
     ]
     
-    date_found = False
     for pattern in date_patterns:
         match = re.search(pattern, text)
         if match:
-            groups = match.groups()
-            if len(groups) == 3:
-                year, month, day = groups
+            if len(match.groups()) == 3:
+                year, month, day = match.groups()
+                result["发票日期"] = f"{year}-{int(month):02d}-{int(day):02d}"
+            else:
+                date_str = match.group(1).replace('年', '-').replace('月', '-').replace('日', '')
                 try:
-                    dt = datetime(int(year), int(month), int(day))
+                    dt = datetime.strptime(date_str, '%Y-%m-%d')
                     result["发票日期"] = dt.strftime('%Y-%m-%d')
-                    date_found = True
-                    break
                 except ValueError:
-                    continue
-            elif len(groups) == 1:
-                # YYYY-MM-DD 格式
-                try:
-                    dt = datetime.strptime(groups[0], '%Y-%m-%d')
-                    result["发票日期"] = dt.strftime('%Y-%m-%d')
-                    date_found = True
-                    break
-                except ValueError:
-                    continue
+                    pass
+            break
+
+    # 3. 提取购买方名称（只匹配“名称:”后面的内容）
+    buyer_match = re.search(r'名称[:：]\s*(.*?)(?:公司|集团|中心|店|厂)', text)
+    if buyer_match:
+        name = buyer_match.group(1).strip()
+        clean_name = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9]', '', name)
+        result["购买方名称"] = clean_name
+
+    # 4. 提取项目名称（优先匹配 * 开头的行）
+    project_lines = []
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    
+    for line in lines:
+        if re.match(r'^[\*\u4e00-\u9fa5]+ $ ', line) and not re.search(r'规格|型号|单位|数量|单价|金额|合计', line):
+            project_lines.append(line)
+        elif line.startswith('*'):
+            project_lines.append(line)
+    
+    if project_lines:
+        result["项目名称"] = "，".join(project_lines[:3])
+    else:
+        star_line = re.search(r'\*([^*]+)\*', text)
+        if star_line:
+            result["项目名称"] = star_line.group(1).strip()
+
+    # 5. 提取价税合计（小写）
+    total_match = re.search(r'(?:价税合计|合计)[（  $ ]小写[） $  ]?[:：\s]*[¥￥]?([\d,]+\.?\d*)', text)
+    if total_match:
+        amount_str = total_match.group(1).replace(',', '')
+        try:
+            float(amount_str)
+            result["价税合计"] = amount_str
+        except ValueError:
+            pass
 
     return result
 
@@ -109,7 +104,6 @@ def pdf_to_text(pdf_file):
     """将PDF转换为文本，优先尝试直接提取，失败则用OCR"""
     text = ""
     
-    # 方法1：尝试直接提取文本
     try:
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
@@ -120,13 +114,12 @@ def pdf_to_text(pdf_file):
         st.warning(f"直接提取文本失败: {e}")
         text = ""
 
-    # 如果没提取到文本，且OCR可用，则用OCR
     if not text.strip() and ocr_available:
         st.info("检测到可能是扫描件，正在使用OCR识别...")
         try:
             from pdf2image import convert_from_bytes
             images = convert_from_bytes(pdf_file.read(), dpi=200)
-            pdf_file.seek(0)  # 重置文件指针
+            pdf_file.seek(0)
             for img in images:
                 result = ocr.ocr(img, cls=True)
                 if result and result[0]:
@@ -158,13 +151,11 @@ if uploaded_files:
     for file in uploaded_files:
         with st.spinner(f"正在处理 {file.name}..."):
             try:
-                # 读取PDF内容
                 text = pdf_to_text(file)
                 if not text.strip():
                     st.warning(f"{file.name} 未提取到任何文字，请检查是否为有效发票。")
                     continue
                 
-                # 提取信息
                 info = extract_invoice_info(text)
                 info["文件名"] = file.name
                 all_results.append(info)
@@ -177,7 +168,6 @@ if uploaded_files:
         st.subheader("📋 提取结果预览")
         st.dataframe(df.fillna(""), use_container_width=True)
         
-        # 生成Excel下载
         output = BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='发票信息')
