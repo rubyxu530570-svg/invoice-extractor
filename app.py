@@ -60,15 +60,26 @@ def extract_invoice_info(text):
     if project_lines:
         result["项目名称"] = "，".join(project_lines[:2])
 
-    # 5. 价税合计（小写）——【终极修复：支持中文大写干扰】
+    # 5. 价税合计（小写）——【终极修复：手动查找】
     amount = ""
 
-    # 新正则：允许（小写）和¥之间有任意字符（如“伍仟圆整”）
-    match = re.search(r'[  $ （]小写[ $  ）][^¥]*[¥￥]\s*([\d.]+)', text)
-    if match:
-        raw_amount = match.group(1)
-        if re.match(r'^\d+(\.\d+)? $ ', raw_amount):
-            amount = raw_amount
+    # 查找 (小写) 后面的金额
+    patterns = [
+        r'[  $ （]小写[ $  ）][^¥]*[¥￥]\s*([\d\s,]+\.?\d*)',
+        r'(?:价税合计|合计).*?[  $ （]小写[ $  ）].*?[¥￥]\s*([\d\s,]+\.?\d*)',
+        r'[¥￥]\s*([\d\s,]+\.?\d*)'
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            raw_amount = match.group(1)
+            # 移除所有空格和逗号
+            clean_amount = re.sub(r'[,\s]', '', raw_amount)
+            # 验证是否为有效数字
+            if re.match(r'^\d+(\.\d+)? $ ', clean_amount):
+                amount = clean_amount
+                break
 
     result["价税合计"] = amount
     return result
@@ -127,8 +138,8 @@ if uploaded_files:
     if all_results:
         df = pd.DataFrame(all_results)
 
-        # ✅ 将“价税合计”转为数值类型
-        df["价税合计"] = pd.to_numeric(df["价税合计"], errors='coerce')
+        # ✅ 保留为文本格式（不转数字）
+        # df["价税合计"] = pd.to_numeric(df["价税合计"], errors='coerce')
 
         st.subheader("📋 提取结果")
         st.dataframe(df.fillna(""), use_container_width=True)
