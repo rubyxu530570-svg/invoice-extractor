@@ -1,21 +1,8 @@
-# Web框架
-streamlit>=1.24.0
 
-# PDF处理
-pdfplumber>=0.10.2
-pdf2image>=1.16.3
-Pillow>=9.5.0
-
-# OCR识别
-paddlepaddle>=2.5.1
-paddleocr>=2.7.0.3
-
-# 数据处理
-pandas>=2.0.3
-openpyxl>=3.1.2
-
-# 系统依赖（用于pdf2image）
-# 注意：在实际部署时，需要在系统中安装poppler
-# Ubuntu/Debian: apt-get install -y poppler-utils
-# macOS: brew install poppler
-# Windows: 下载poppler并添加到PATH
+streamlit
+paddleocr
+pdfplumber
+pandas
+openpyxl
+pdf2image
+Pillow
