@@ -76,13 +76,8 @@ def extract_invoice_info(text):
             raw_amount = match.group(1)
             # 移除所有空格和逗号，保留数字和小数点
             clean_amount = re.sub(r'[,\s]', '', raw_amount)
-            # 验证是否为有效数字（必须是数字+可选小数点）
+            # 验证是否为有效数字
             if re.match(r'^\d+(\.\d+)? $ ', clean_amount):
-                # 保证小数点后最多两位
-                if '.' in clean_amount:
-                    clean_amount = clean_amount.rstrip('0').rstrip('.')
-                    if clean_amount == '':
-                        clean_amount = '0'
                 amount = clean_amount
                 break
 
@@ -142,6 +137,10 @@ if uploaded_files:
 
     if all_results:
         df = pd.DataFrame(all_results)
+
+        # ✅ 关键修复：将“价税合计”转为数值类型
+        df["价税合计"] = pd.to_numeric(df["价税合计"], errors='coerce')
+
         st.subheader("📋 提取结果")
         st.dataframe(df.fillna(""), use_container_width=True)
 
